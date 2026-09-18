@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from zoneinfo import ZoneInfo
 
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.7.0"
 KST = ZoneInfo("Asia/Seoul")
 
 SHEETS = [

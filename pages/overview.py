@@ -10,6 +10,7 @@ import streamlit as st
 
 from dashboard.config import APP_VERSION, COLORS, KST
 from dashboard.core import *  # shared dashboard metrics/filter/UI helpers
+from dashboard.github_dispatch import dispatch_github_workflow, github_dispatch_configured
 
 def render_overview(tables: dict[str, pd.DataFrame]) -> None:
     account = tables["account"]
@@ -32,16 +33,72 @@ def render_overview(tables: dict[str, pd.DataFrame]) -> None:
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        f"""
-        <div class="period-row">
-            <span class="period-chip"><strong>이번달</strong> {fmt_period(current_start, current_end)}</span>
-            <span class="period-chip"><strong>전월동기</strong> {fmt_period(prev_start, prev_end)}</span>
-            <span class="period-chip"><strong>전년동기</strong> {fmt_period(yoy_start, yoy_end)}</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # --------------------------------------------------------
+    # Period chips + manual data collection control
+    # --------------------------------------------------------
+    period_col, collect_col = st.columns([5.35, 1.35], vertical_alignment="bottom")
+
+    with period_col:
+        st.markdown(
+            f"""
+            <div class="period-row">
+                <span class="period-chip"><strong>이번달</strong> {fmt_period(current_start, current_end)}</span>
+                <span class="period-chip"><strong>전월동기</strong> {fmt_period(prev_start, prev_end)}</span>
+                <span class="period-chip"><strong>전년동기</strong> {fmt_period(yoy_start, yoy_end)}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    latest_collect_text = "-"
+    if not account.empty and "collected_at" in account.columns:
+        collected_series = pd.to_datetime(
+            account["collected_at"],
+            errors="coerce",
+        ).dropna()
+        if not collected_series.empty:
+            latest_collect = collected_series.max()
+            latest_collect_text = latest_collect.strftime("%m.%d %H:%M")
+
+    dispatch_ready = github_dispatch_configured()
+
+    with collect_col:
+        st.markdown(
+            f'<div style="text-align:right;color:#64748B;font-size:0.76rem;line-height:1.35;margin-bottom:5px;">'
+            f'최근 수집 <strong style="color:#0F172A;">{html.escape(latest_collect_text)}</strong>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        collect_clicked = st.button(
+            "🔄 지금 수집",
+            type="primary",
+            use_container_width=True,
+            disabled=not dispatch_ready,
+            key="overview_collect_now",
+        )
+
+        if not dispatch_ready:
+            st.caption("GitHub 수동 수집 Secret 미설정")
+
+        if collect_clicked:
+            try:
+                with st.spinner("GitHub Actions 실행 요청 중..."):
+                    dispatch_github_workflow("streamlit_overview")
+
+                requested_at = datetime.now(KST).strftime("%H:%M")
+                st.session_state["overview_collect_requested_at"] = requested_at
+                st.toast(
+                    "수집 요청을 보냈습니다. GitHub Actions 완료 후 데이터 새로고침을 눌러주세요.",
+                    icon="✅",
+                )
+            except Exception as exc:
+                st.error(f"수집 실행 요청 실패: {exc}")
+
+        if st.session_state.get("overview_collect_requested_at"):
+            st.caption(
+                f"최근 요청 {st.session_state['overview_collect_requested_at']} · 완료 후 새로고침"
+            )
 
     filter_col1, filter_col2, filter_col3 = st.columns([1.55, 1.55, 4.9])
 
