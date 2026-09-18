@@ -1,0 +1,14 @@
+requests>=2.32,<3
+python-dotenv>=1.0,<2
+pip-system-certs>=5.3,<6
+
+gspread>=6,<7
+google-auth>=2,<3
+google-auth-oauthlib>=1.2,<2
+
+tzdata
+
+streamlit>=1.50,<2
+pandas>=2.2,<3
+plotly>=6,<7
+

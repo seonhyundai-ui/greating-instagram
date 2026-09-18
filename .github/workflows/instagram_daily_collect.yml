@@ -1,0 +1,98 @@
+name: Greating Instagram Data Collect
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Trigger source"
+        required: false
+        default: "manual"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: greating-instagram-daily-collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: Collect Instagram data
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      TZ: Asia/Seoul
+      PYTHONUTF8: "1"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Restore runtime secrets
+        shell: bash
+        env:
+          DOTENV_B64: ${{ secrets.DOTENV_B64 }}
+          GOOGLE_OAUTH_CLIENT_B64: ${{ secrets.GOOGLE_OAUTH_CLIENT_B64 }}
+          GOOGLE_TOKEN_B64: ${{ secrets.GOOGLE_TOKEN_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p credentials logs
+
+          if [ -z "$DOTENV_B64" ]; then
+            echo "Missing GitHub secret: DOTENV_B64"
+            exit 1
+          fi
+          if [ -z "$GOOGLE_OAUTH_CLIENT_B64" ]; then
+            echo "Missing GitHub secret: GOOGLE_OAUTH_CLIENT_B64"
+            exit 1
+          fi
+          if [ -z "$GOOGLE_TOKEN_B64" ]; then
+            echo "Missing GitHub secret: GOOGLE_TOKEN_B64"
+            exit 1
+          fi
+
+          printf '%s' "$DOTENV_B64" | base64 --decode > .env
+          printf '%s' "$GOOGLE_OAUTH_CLIENT_B64" | base64 --decode > credentials/google_oauth_client.json
+          printf '%s' "$GOOGLE_TOKEN_B64" | base64 --decode > credentials/google_token.json
+
+          test -s .env
+          test -s credentials/google_oauth_client.json
+          test -s credentials/google_token.json
+
+      - name: Run daily collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_STAMP="$(date '+%Y%m%d_%H%M%S')"
+          LOG_FILE="logs/daily_collect_${RUN_STAMP}.log"
+
+          echo "============================================================"
+          echo "GitHub Actions trigger source: ${{ inputs.source }}"
+          echo "Run ID: $GITHUB_RUN_ID"
+          echo "Started: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "============================================================"
+
+          python -u -m scripts.daily_collect 2>&1 | tee "$LOG_FILE"
+
+      - name: Upload collector log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instagram-collector-log-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: ignore
+          retention-days: 14
