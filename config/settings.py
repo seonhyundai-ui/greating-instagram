@@ -30,7 +30,7 @@ def get_setting(
     2. Environment variable / .env
     3. default
 
-    This keeps the same code working in:
+    Works in:
     - local development
     - GitHub Actions
     - Streamlit Community Cloud
@@ -68,6 +68,11 @@ def get_setting(
 def require_setting(
     key: str,
 ):
+    """
+    Use only for settings that are mandatory
+    in every execution environment.
+    """
+
     value = get_setting(
         key
     )
@@ -84,7 +89,34 @@ def require_setting(
 
 
 # ============================================================
-# Meta
+# Google Sheets
+# ============================================================
+#
+# The Streamlit dashboard always needs this value.
+# Local / GitHub Actions can read it from .env.
+# Streamlit Cloud reads it from st.secrets.
+# ============================================================
+
+GOOGLE_SPREADSHEET_ID = require_setting(
+    "GOOGLE_SPREADSHEET_ID"
+)
+
+
+# ============================================================
+# Meta API
+# ============================================================
+#
+# IMPORTANT:
+# Streamlit dashboard pages only READ Google Sheets.
+# They do not call Meta API directly.
+#
+# Therefore Meta settings MUST NOT be required at module import
+# time, otherwise Streamlit Cloud crashes before the dashboard
+# starts when Meta secrets are intentionally absent there.
+#
+# GitHub Actions / local collection scripts already have these
+# values in .env, so they will resolve normally in those
+# environments.
 # ============================================================
 
 META_API_VERSION = get_setting(
@@ -92,8 +124,9 @@ META_API_VERSION = get_setting(
     "v26.0",
 )
 
-INSTAGRAM_ACCOUNT_ID = require_setting(
-    "INSTAGRAM_ACCOUNT_ID"
+INSTAGRAM_ACCOUNT_ID = get_setting(
+    "INSTAGRAM_ACCOUNT_ID",
+    "",
 )
 
 FACEBOOK_PAGE_ID = get_setting(
@@ -101,24 +134,17 @@ FACEBOOK_PAGE_ID = get_setting(
     "",
 )
 
-META_AD_ACCOUNT_ID = require_setting(
-    "META_AD_ACCOUNT_ID"
+META_AD_ACCOUNT_ID = get_setting(
+    "META_AD_ACCOUNT_ID",
+    "",
 )
 
-META_IG_ACCESS_TOKEN = require_setting(
-    "META_IG_ACCESS_TOKEN"
+META_IG_ACCESS_TOKEN = get_setting(
+    "META_IG_ACCESS_TOKEN",
+    "",
 )
 
 META_ADS_ACCESS_TOKEN = get_setting(
     "META_ADS_ACCESS_TOKEN",
     META_IG_ACCESS_TOKEN,
-)
-
-
-# ============================================================
-# Google Sheets
-# ============================================================
-
-GOOGLE_SPREADSHEET_ID = require_setting(
-    "GOOGLE_SPREADSHEET_ID"
 )
