@@ -17,6 +17,10 @@ def render_overview(tables: dict[str, pd.DataFrame]) -> None:
     audience = tables["audience"]
     content = tables["content"]
     ads = tables["ads"]
+    account_period = tables.get(
+        "account_period",
+        pd.DataFrame(),
+    )
 
     # --------------------------------------------------------
     # Periods
@@ -100,6 +104,177 @@ def render_overview(tables: dict[str, pd.DataFrame]) -> None:
                 f"최근 요청 {st.session_state['overview_collect_requested_at']} · 완료 후 새로고침"
             )
 
+    # --------------------------------------------------------
+    # Account-level KPI source
+    # --------------------------------------------------------
+    def latest_period_row(period_type: str) -> pd.Series | None:
+        if account_period.empty or "period_type" not in account_period.columns:
+            return None
+
+        subset = account_period[
+            account_period["period_type"].astype(str) == period_type
+        ].copy()
+
+        if subset.empty:
+            return None
+
+        if "snapshot_date" in subset.columns:
+            subset = subset.sort_values("snapshot_date")
+
+        return subset.iloc[-1]
+
+    current_account = latest_period_row("CURRENT_MTD")
+    prev_account = latest_period_row("PREV_MTD")
+    yoy_account = latest_period_row("YOY_MTD")
+
+    def row_number(row: pd.Series | None, column: str):
+        if row is None or column not in row.index:
+            return None
+        value = row.get(column)
+        if value is None or pd.isna(value):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    # --------------------------------------------------------
+    # Top KPIs: account-level, independent of content filters
+    # --------------------------------------------------------
+    render_section_title(
+        "계정 핵심 현황",
+        "Meta Business Suite와 같은 계정 단위 지표입니다. 아래 콘텐츠 필터의 영향을 받지 않습니다.",
+    )
+
+    latest_followers = 0.0
+    follower_delta_abs = None
+    follower_delta_direction = None
+    follower_spark_values: list[float] = []
+
+    if not account.empty:
+        latest_followers = float(account.iloc[-1]["followers_count"])
+        follower_spark_values = (
+            account.tail(14)["followers_count"]
+            .dropna()
+            .astype(float)
+            .tolist()
+        )
+        if len(account) >= 2:
+            previous_followers = float(account.iloc[-2]["followers_count"])
+            follower_delta_abs = latest_followers - previous_followers
+            follower_delta_direction = follower_delta_abs
+
+    if current_account is None:
+        st.info(
+            "ACCOUNT_PERIOD_INSIGHTS가 아직 없습니다. v0.9.4 수집을 1회 실행하면 계정 KPI가 표시됩니다."
+        )
+
+    row1 = st.columns(4)
+
+    with row1[0]:
+        follower_text = "-"
+        if follower_delta_abs is not None and not pd.isna(follower_delta_abs):
+            follower_text = f"{int(follower_delta_abs):+,}명"
+        render_kpi_card(
+            label="누적 팔로워",
+            value=f"{fmt_int(latest_followers)}명",
+            accent=COLORS["purple"],
+            direct_delta_text=follower_text,
+            direct_delta_value=follower_delta_direction,
+            direct_delta_label="직전 수집일 대비",
+            subline="최근 수집일 기준 · 우측 미니 추이는 최근 최대 14일",
+            spark_values=follower_spark_values,
+        )
+
+    account_metric_specs = [
+        ("조회수", "views", COLORS["cyan"]),
+        ("도달수", "reach", COLORS["primary"]),
+        ("콘텐츠 상호작용", "total_interactions", COLORS["green"]),
+    ]
+
+    for column, (label, key, accent) in zip(row1[1:], account_metric_specs):
+        current_value = row_number(current_account, key)
+        prev_value = row_number(prev_account, key)
+        yoy_value = row_number(yoy_account, key)
+
+        with column:
+            render_kpi_card(
+                label=label,
+                value=fmt_int(current_value),
+                accent=accent,
+                prev_delta=safe_pct_change(current_value, prev_value),
+                yoy_delta=safe_pct_change(current_value, yoy_value),
+                subline="Instagram 계정 단위",
+            )
+
+    st.write("")
+
+    row2 = st.columns(3)
+
+    current_links = row_number(current_account, "instagram_link_clicks")
+    prev_links = row_number(prev_account, "instagram_link_clicks")
+    yoy_links = row_number(yoy_account, "instagram_link_clicks")
+
+    with row2[0]:
+        render_kpi_card(
+            label="Instagram 링크 클릭*",
+            value=fmt_int(current_links),
+            accent=COLORS["orange"],
+            prev_delta=safe_pct_change(current_links, prev_links),
+            yoy_delta=safe_pct_change(current_links, yoy_links),
+            subline="현재: 광고 링크 클릭 + 수집된 Story 링크 클릭",
+        )
+
+    current_profile = row_number(current_account, "profile_views")
+    prev_profile = row_number(prev_account, "profile_views")
+    yoy_profile = row_number(yoy_account, "profile_views")
+
+    with row2[1]:
+        render_kpi_card(
+            label="프로필 방문",
+            value=fmt_int(current_profile),
+            accent=COLORS["pink"],
+            prev_delta=safe_pct_change(current_profile, prev_profile),
+            yoy_delta=safe_pct_change(current_profile, yoy_profile),
+            subline="Instagram 계정 단위",
+        )
+
+    current_follows = row_number(current_account, "follows")
+    prev_follows = row_number(prev_account, "follows")
+    yoy_follows = row_number(yoy_account, "follows")
+    current_unfollows = row_number(current_account, "unfollows")
+    current_net = row_number(current_account, "net_follows")
+
+    follow_subline = "Instagram 계정 단위"
+    if current_unfollows is not None and current_net is not None:
+        follow_subline = (
+            f"팔로우 취소 {fmt_int(current_unfollows)} · 순증 {int(current_net):+,}"
+        )
+
+    with row2[2]:
+        render_kpi_card(
+            label="팔로우",
+            value=fmt_int(current_follows),
+            accent=COLORS["purple"],
+            prev_delta=safe_pct_change(current_follows, prev_follows),
+            yoy_delta=safe_pct_change(current_follows, yoy_follows),
+            subline=follow_subline,
+        )
+
+    st.caption(
+        "* 링크 클릭은 현재 수집된 Story 링크 클릭과 광고 inline_link_clicks를 합산합니다. "
+        "전월·전년 비교값은 과거 Story 클릭 이력이 없어 Story 클릭수를 제외한 광고 링크 클릭 기준입니다."
+    )
+
+    # --------------------------------------------------------
+    # Content filters: affect only the content-analysis sections below
+    # --------------------------------------------------------
+    st.divider()
+    render_section_title(
+        "콘텐츠 분석 조건",
+        "아래 운영 현황, 기간 비교, 차트, Top Content에만 적용됩니다.",
+    )
+
     filter_col1, filter_col2, filter_col3 = st.columns([1.55, 1.55, 4.9])
 
     with filter_col1:
@@ -120,20 +295,27 @@ def render_overview(tables: dict[str, pd.DataFrame]) -> None:
 
     with filter_col3:
         st.markdown(
-            '<div class="filter-note">성과 비교는 <strong>CONTENT_LIFETIME 현재 누적값</strong> 기준입니다. '
+            '<div class="filter-note">콘텐츠 성과 비교는 <strong>CONTENT_LIFETIME 현재 누적값</strong> 기준입니다. '
             'D+7 / D+14 / D+30 비교는 Snapshot 데이터가 충분히 축적되면 활성화합니다.</div>',
             unsafe_allow_html=True,
         )
 
     # --------------------------------------------------------
-    # Period subsets
+    # Content period subsets
     # --------------------------------------------------------
-    current_type_df = filter_content_type(filter_by_period(content, current_start, current_end), content_type_filter)
-    prev_type_df = filter_content_type(filter_by_period(content, prev_start, prev_end), content_type_filter)
-    yoy_type_df = filter_content_type(filter_by_period(content, yoy_start, yoy_end), content_type_filter)
+    current_type_df = filter_content_type(
+        filter_by_period(content, current_start, current_end),
+        content_type_filter,
+    )
+    prev_type_df = filter_content_type(
+        filter_by_period(content, prev_start, prev_end),
+        content_type_filter,
+    )
+    yoy_type_df = filter_content_type(
+        filter_by_period(content, yoy_start, yoy_end),
+        content_type_filter,
+    )
 
-    # Performance scope policy:
-    # 전체/Organic = all selected contents, Paid = paid contents only.
     current_df = filter_performance_scope(current_type_df, performance_filter)
     prev_df = filter_performance_scope(prev_type_df, performance_filter)
     yoy_df = filter_performance_scope(yoy_type_df, performance_filter)
@@ -142,35 +324,9 @@ def render_overview(tables: dict[str, pd.DataFrame]) -> None:
     prev_summary = period_summary(prev_df, performance_filter)
     yoy_summary = period_summary(yoy_df, performance_filter)
 
-    # --------------------------------------------------------
-    # Top KPIs
-    # --------------------------------------------------------
-    render_section_title("핵심 현황")
-
-    latest_followers = 0.0
-    follower_delta_abs = None
-    follower_delta_direction = None
-    follower_spark_values: list[float] = []
-
-    if not account.empty:
-        latest_followers = float(account.iloc[-1]["followers_count"])
-        follower_spark_values = (
-            account.tail(14)["followers_count"]
-            .dropna()
-            .astype(float)
-            .tolist()
-        )
-        if len(account) >= 2:
-            previous_followers = float(account.iloc[-2]["followers_count"])
-            follower_delta_abs = latest_followers - previous_followers
-            follower_delta_direction = follower_delta_abs
-
     current_reels = int((current_df["content_type"] == "Reels").sum()) if not current_df.empty else 0
     current_feed = int((current_df["content_type"] == "Feed").sum()) if not current_df.empty else 0
 
-    # Ad-running content KPI is an operational KPI, so it is independent of
-    # the Total/Organic/Paid metric-layer selection. It still respects the
-    # selected content type and period.
     current_paid_content = int(current_type_df["has_paid_bool"].sum()) if not current_type_df.empty else 0
     prev_paid_content = int(prev_type_df["has_paid_bool"].sum()) if not prev_type_df.empty else 0
     yoy_paid_content = int(yoy_type_df["has_paid_bool"].sum()) if not yoy_type_df.empty else 0
@@ -185,34 +341,24 @@ def render_overview(tables: dict[str, pd.DataFrame]) -> None:
     prev_spend = ads_spend_between(prev_start, prev_end)
     yoy_spend = ads_spend_between(yoy_start, yoy_end)
 
-    row1 = st.columns(4)
+    render_section_title(
+        "운영 현황",
+        "선택한 콘텐츠 유형·성과 기준을 반영한 운영 지표입니다.",
+    )
 
-    with row1[0]:
-        follower_text = "-"
-        if follower_delta_abs is not None and not pd.isna(follower_delta_abs):
-            follower_text = f"{int(follower_delta_abs):+,}명"
-        render_kpi_card(
-            label="누적 팔로워",
-            value=f"{fmt_int(latest_followers)}명",
-            accent=COLORS["purple"],
-            direct_delta_text=follower_text,
-            direct_delta_value=follower_delta_direction,
-            direct_delta_label="직전 수집일 대비",
-            subline="최근 수집일 기준 · 우측 미니 추이는 최근 최대 14일",
-            spark_values=follower_spark_values,
-        )
+    ops_cols = st.columns(3)
 
-    with row1[1]:
+    with ops_cols[0]:
         render_kpi_card(
             label="콘텐츠수",
             value=f"{len(current_df):,}개",
             accent=COLORS["primary"],
             prev_delta=safe_pct_change(len(current_df), len(prev_df)),
             yoy_delta=safe_pct_change(len(current_df), len(yoy_df)),
-            subline=f"{performance_filter} 기준 구성 · Reels {current_reels}개 · Feed {current_feed}개",
+            subline=f"Reels {current_reels}개 · Feed {current_feed}개",
         )
 
-    with row1[2]:
+    with ops_cols[1]:
         render_kpi_card(
             label="광고 집행 콘텐츠",
             value=f"{current_paid_content:,}개",
@@ -222,7 +368,7 @@ def render_overview(tables: dict[str, pd.DataFrame]) -> None:
             subline=f"선택 콘텐츠 유형: {content_type_filter}",
         )
 
-    with row1[3]:
+    with ops_cols[2]:
         render_kpi_card(
             label="광고비",
             value=fmt_won(current_spend),
@@ -231,38 +377,6 @@ def render_overview(tables: dict[str, pd.DataFrame]) -> None:
             yoy_delta=safe_pct_change(current_spend, yoy_spend),
             subline="Instagram Ads · D-1 누적",
         )
-
-    st.write("")
-
-    row2 = st.columns(4)
-    metric_accents = {
-        "조회수": COLORS["cyan"],
-        "도달수": COLORS["primary"],
-        "인터랙션": COLORS["green"],
-        "저장": COLORS["orange"],
-    }
-
-    for column, metric_label in zip(row2, ["조회수", "도달수", "인터랙션", "저장"]):
-        current_value = current_summary[f"sum_{metric_label}"]
-        prev_value = prev_summary[f"sum_{metric_label}"]
-        yoy_value = yoy_summary[f"sum_{metric_label}"]
-
-        display_label = metric_label
-        if metric_label == "도달수" and performance_filter == "전체":
-            display_label = "도달수*"
-
-        with column:
-            render_kpi_card(
-                label=f"{display_label} · {performance_filter}",
-                value=fmt_int(current_value),
-                accent=metric_accents[metric_label],
-                prev_delta=safe_pct_change(current_value, prev_value),
-                yoy_delta=safe_pct_change(current_value, yoy_value),
-                subline=f"콘텐츠 유형: {content_type_filter}",
-            )
-
-    if performance_filter == "전체":
-        st.caption("* 전체 도달수는 Organic Reach + Paid Reach이며 동일 사용자가 중복 포함될 수 있습니다.")
 
     # --------------------------------------------------------
     # Comparison table + stacked charts on right

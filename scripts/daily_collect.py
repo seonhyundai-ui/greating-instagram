@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import calendar
+import json
+
 from datetime import (
+    date,
     datetime,
     timedelta,
 )
@@ -60,7 +64,7 @@ from src.sheets_repository import (
 # Version
 # ============================================================
 
-VERSION = "0.6.4"
+VERSION = "0.9.4"
 
 KST = ZoneInfo(
     "Asia/Seoul"
@@ -408,7 +412,7 @@ def collect_account(
 ) -> dict:
 
     section(
-        "[1/8] ACCOUNT_HISTORY"
+        "[1/9] ACCOUNT_HISTORY"
     )
 
     account = fetch_account(
@@ -484,7 +488,7 @@ def collect_audience(
 ) -> None:
 
     section(
-        "[2/8] AUDIENCE_HISTORY"
+        "[2/9] AUDIENCE_HISTORY"
     )
 
     source_rows = (
@@ -713,7 +717,7 @@ def collect_new_content(
 ) -> None:
 
     section(
-        "[3/8] CONTENT_MASTER"
+        "[3/9] CONTENT_MASTER"
     )
 
     (
@@ -875,7 +879,7 @@ def refresh_ad_master(
 ):
 
     section(
-        "[4/8] AD_MASTER + CONTENT MAPPING"
+        "[4/9] AD_MASTER + CONTENT MAPPING"
     )
 
     (
@@ -1744,7 +1748,7 @@ def collect_recent_lifetime(
 ) -> None:
 
     section(
-        "[5/8] CONTENT_LIFETIME D+0~D+30"
+        "[5/9] CONTENT_LIFETIME D+0~D+30"
     )
 
     today = (
@@ -1901,7 +1905,7 @@ def collect_media_snapshots(
 ) -> None:
 
     section(
-        "[6/8] MEDIA_SNAPSHOT"
+        "[6/9] MEDIA_SNAPSHOT"
     )
 
     today = (
@@ -2044,7 +2048,7 @@ def collect_ads_daily(
 ) -> None:
 
     section(
-        "[7/8] ADS_DAILY D-1"
+        "[7/9] ADS_DAILY D-1"
     )
 
     target_date = (
@@ -2307,7 +2311,7 @@ def collect_stories(
 ) -> None:
 
     section(
-        "[8/8] STORY_HISTORY"
+        "[8/9] STORY_HISTORY"
     )
 
     stories = fetch_stories(
@@ -2529,6 +2533,525 @@ def collect_stories(
 
 
 # ============================================================
+# 9. ACCOUNT_PERIOD_INSIGHTS
+# ============================================================
+
+ACCOUNT_PERIOD_HEADERS = [
+    "snapshot_date",
+    "period_type",
+    "period_start",
+    "period_end",
+    "views",
+    "reach",
+    "total_interactions",
+    "profile_views",
+    "follows",
+    "unfollows",
+    "net_follows",
+    "ads_inline_link_clicks",
+    "story_link_clicks",
+    "instagram_link_clicks",
+    "story_clicks_included",
+    "metric_qa_status",
+    "collected_at",
+]
+
+
+def previous_month_same_period_dates(
+    current_start: date,
+    current_end: date,
+) -> tuple[date, date]:
+
+    if current_start.month == 1:
+        year = current_start.year - 1
+        month = 12
+    else:
+        year = current_start.year
+        month = current_start.month - 1
+
+    start = date(
+        year,
+        month,
+        1,
+    )
+
+    end = date(
+        year,
+        month,
+        min(
+            current_end.day,
+            calendar.monthrange(
+                year,
+                month,
+            )[1],
+        ),
+    )
+
+    return start, end
+
+
+def previous_year_same_period_dates(
+    current_start: date,
+    current_end: date,
+) -> tuple[date, date]:
+
+    year = current_start.year - 1
+
+    start = date(
+        year,
+        current_start.month,
+        1,
+    )
+
+    end = date(
+        year,
+        current_end.month,
+        min(
+            current_end.day,
+            calendar.monthrange(
+                year,
+                current_end.month,
+            )[1],
+        ),
+    )
+
+    return start, end
+
+
+def fetch_account_total_value(
+    metric: str,
+    start: date,
+    end: date,
+):
+    """Fetch one account-level total_value metric for an inclusive UI date range."""
+
+    payload = meta.get_instagram(
+        f"{INSTAGRAM_ACCOUNT_ID}/insights",
+        params={
+            "metric": metric,
+            "period": "day",
+            "metric_type": "total_value",
+            "since": start.isoformat(),
+            # Account Insights uses an exclusive end boundary in our QA.
+            "until": (
+                end
+                + timedelta(days=1)
+            ).isoformat(),
+        },
+    )
+
+    data = payload.get("data") or []
+
+    if not data:
+        return None
+
+    total_value = data[0].get("total_value") or {}
+
+    return numeric(
+        total_value.get("value")
+    )
+
+
+def fetch_follow_breakdown(
+    start: date,
+    end: date,
+) -> tuple[int | None, int | None]:
+
+    payload = meta.get_instagram(
+        f"{INSTAGRAM_ACCOUNT_ID}/insights",
+        params={
+            "metric": "follows_and_unfollows",
+            "period": "day",
+            "metric_type": "total_value",
+            "breakdown": "follow_type",
+            "since": start.isoformat(),
+            "until": (
+                end
+                + timedelta(days=1)
+            ).isoformat(),
+        },
+    )
+
+    follower = None
+    non_follower = None
+
+    for item in payload.get("data") or []:
+        total_value = item.get("total_value") or {}
+
+        for breakdown in total_value.get("breakdowns") or []:
+            for result in breakdown.get("results") or []:
+                dimensions = [
+                    str(value).upper()
+                    for value
+                    in result.get("dimension_values") or []
+                ]
+
+                value = numeric(
+                    result.get("value")
+                )
+
+                if "FOLLOWER" in dimensions:
+                    follower = value
+
+                if "NON_FOLLOWER" in dimensions:
+                    non_follower = value
+
+    return follower, non_follower
+
+
+def fetch_ads_inline_link_clicks(
+    start: date,
+    end: date,
+):
+
+    account_id = str(
+        META_AD_ACCOUNT_ID
+    ).replace(
+        "act_",
+        "",
+    )
+
+    payload = meta.get_ads(
+        f"act_{account_id}/insights",
+        params={
+            "fields": "inline_link_clicks",
+            "level": "account",
+            "time_range": json.dumps(
+                {
+                    "since": start.isoformat(),
+                    "until": end.isoformat(),
+                }
+            ),
+            "limit": 100,
+        },
+    )
+
+    rows = payload.get("data") or []
+
+    if not rows:
+        return 0
+
+    return numeric(
+        rows[0].get(
+            "inline_link_clicks"
+        )
+    ) or 0
+
+
+def sum_story_link_clicks(
+    start: date,
+    end: date,
+) -> int:
+    """Sum collected Story link clicks by Story posted date."""
+
+    try:
+        worksheet = sheets.spreadsheet.worksheet(
+            "STORY_HISTORY"
+        )
+    except Exception:
+        return 0
+
+    values = worksheet.get_all_values()
+
+    if not values:
+        return 0
+
+    headers = values[0]
+
+    if (
+        "posted_at" not in headers
+        or "link_clicks" not in headers
+    ):
+        return 0
+
+    posted_index = headers.index(
+        "posted_at"
+    )
+
+    click_index = headers.index(
+        "link_clicks"
+    )
+
+    total = 0
+
+    for raw_row in values[1:]:
+        row = raw_row + [
+            ""
+        ] * (
+            len(headers)
+            - len(raw_row)
+        )
+
+        posted_text = str(
+            row[posted_index]
+        ).strip()
+
+        if not posted_text:
+            continue
+
+        try:
+            posted_date = datetime.fromisoformat(
+                posted_text
+            ).date()
+        except ValueError:
+            try:
+                posted_date = datetime.strptime(
+                    posted_text,
+                    "%Y-%m-%d %H:%M:%S",
+                ).date()
+            except ValueError:
+                continue
+
+        if not (
+            start
+            <= posted_date
+            <= end
+        ):
+            continue
+
+        total += int(
+            numeric(
+                row[click_index]
+            )
+            or 0
+        )
+
+    return total
+
+
+def fetch_account_period_row(
+    *,
+    snapshot_date: date,
+    period_type: str,
+    start: date,
+    end: date,
+    include_story_clicks: bool,
+    collected_at: datetime,
+) -> dict:
+
+    issues = []
+
+    metrics = {}
+
+    for metric in [
+        "views",
+        "reach",
+        "total_interactions",
+        "profile_views",
+    ]:
+        try:
+            metrics[metric] = fetch_account_total_value(
+                metric,
+                start,
+                end,
+            )
+        except MetaAPIError as exc:
+            print(
+                f"[WARN] ACCOUNT_PERIOD {period_type} "
+                f"metric={metric} failed | {exc}"
+            )
+            metrics[metric] = None
+            issues.append(
+                f"{metric.upper()}_UNAVAILABLE"
+            )
+
+    try:
+        follows, unfollows = fetch_follow_breakdown(
+            start,
+            end,
+        )
+    except MetaAPIError as exc:
+        print(
+            f"[WARN] ACCOUNT_PERIOD {period_type} "
+            f"follow breakdown failed | {exc}"
+        )
+        follows = None
+        unfollows = None
+        issues.append(
+            "FOLLOW_BREAKDOWN_UNAVAILABLE"
+        )
+
+    try:
+        ads_link_clicks = fetch_ads_inline_link_clicks(
+            start,
+            end,
+        )
+    except MetaAPIError as exc:
+        print(
+            f"[WARN] ACCOUNT_PERIOD {period_type} "
+            f"ads inline_link_clicks failed | {exc}"
+        )
+        ads_link_clicks = None
+        issues.append(
+            "ADS_LINK_CLICKS_UNAVAILABLE"
+        )
+
+    if include_story_clicks:
+        story_link_clicks = sum_story_link_clicks(
+            start,
+            end,
+        )
+    else:
+        # Historical Story click history did not exist before this dashboard collector.
+        # User policy: historical comparison stays usable with Ads link clicks only.
+        story_link_clicks = 0
+
+    instagram_link_clicks = None
+
+    if ads_link_clicks is not None:
+        instagram_link_clicks = (
+            ads_link_clicks
+            + story_link_clicks
+        )
+
+    net_follows = None
+
+    if (
+        follows is not None
+        and unfollows is not None
+    ):
+        net_follows = (
+            follows
+            - unfollows
+        )
+
+    return {
+        "snapshot_date": snapshot_date.isoformat(),
+        "period_type": period_type,
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+        "views": metrics.get("views"),
+        "reach": metrics.get("reach"),
+        "total_interactions": metrics.get("total_interactions"),
+        "profile_views": metrics.get("profile_views"),
+        "follows": follows,
+        "unfollows": unfollows,
+        "net_follows": net_follows,
+        "ads_inline_link_clicks": ads_link_clicks,
+        "story_link_clicks": story_link_clicks,
+        "instagram_link_clicks": instagram_link_clicks,
+        "story_clicks_included": (
+            "TRUE"
+            if include_story_clicks
+            else "FALSE"
+        ),
+        "metric_qa_status": (
+            "OK"
+            if not issues
+            else "CHECK:" + ",".join(
+                sorted(set(issues))
+            )
+        ),
+        "collected_at": format_datetime(
+            collected_at
+        ),
+    }
+
+
+def collect_account_period_insights(
+    collected_at: datetime,
+) -> None:
+
+    section(
+        "[9/9] ACCOUNT_PERIOD_INSIGHTS"
+    )
+
+    current_end = (
+        collected_at.date()
+        - timedelta(days=1)
+    )
+
+    current_start = current_end.replace(
+        day=1
+    )
+
+    prev_start, prev_end = previous_month_same_period_dates(
+        current_start,
+        current_end,
+    )
+
+    yoy_start, yoy_end = previous_year_same_period_dates(
+        current_start,
+        current_end,
+    )
+
+    periods = [
+        (
+            "CURRENT_MTD",
+            current_start,
+            current_end,
+            True,
+        ),
+        (
+            "PREV_MTD",
+            prev_start,
+            prev_end,
+            False,
+        ),
+        (
+            "YOY_MTD",
+            yoy_start,
+            yoy_end,
+            False,
+        ),
+    ]
+
+    sheets.ensure_worksheet(
+        "ACCOUNT_PERIOD_INSIGHTS",
+        ACCOUNT_PERIOD_HEADERS,
+        rows=1000,
+    )
+
+    rows = []
+
+    for (
+        period_type,
+        start,
+        end,
+        include_story_clicks,
+    ) in periods:
+
+        row = fetch_account_period_row(
+            snapshot_date=collected_at.date(),
+            period_type=period_type,
+            start=start,
+            end=end,
+            include_story_clicks=(
+                include_story_clicks
+            ),
+            collected_at=collected_at,
+        )
+
+        rows.append(row)
+
+        print(
+            f"[ACCOUNT PERIOD] {period_type} "
+            f"{start.isoformat()}~{end.isoformat()} "
+            f"| views={row['views']} "
+            f"| reach={row['reach']} "
+            f"| links={row['instagram_link_clicks']} "
+            f"| story={'Y' if include_story_clicks else 'N'} "
+            f"| QA={row['metric_qa_status']}"
+        )
+
+    result = sheets.upsert_rows(
+        "ACCOUNT_PERIOD_INSIGHTS",
+        rows,
+        key_fields=[
+            "snapshot_date",
+            "period_type",
+        ],
+        preserve_existing_on_none=True,
+    )
+
+    print(
+        f"[OK] rows={len(rows):,} "
+        f"| inserted={result['inserted']} "
+        f"| updated={result['updated']}"
+    )
+
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -2654,6 +3177,14 @@ def main() -> None:
     # ========================================================
 
     collect_stories(
+        collected_at
+    )
+
+    # ========================================================
+    # 9. Account period insights
+    # ========================================================
+
+    collect_account_period_insights(
         collected_at
     )
 

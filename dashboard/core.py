@@ -15,6 +15,8 @@ from dashboard.config import COLORS, METRIC_LABELS, PERFORMANCE_LABELS, SHEETS
 # Data loading
 # ============================================================
 
+ACCOUNT_PERIOD_SHEET = "ACCOUNT_PERIOD_INSIGHTS"
+
 @st.cache_data(ttl=300, show_spinner=False)
 def load_all_data() -> dict[str, pd.DataFrame]:
     client = get_gspread_client()
@@ -26,6 +28,17 @@ def load_all_data() -> dict[str, pd.DataFrame]:
         worksheet = spreadsheet.worksheet(sheet_name)
         records = worksheet.get_all_records()
         result[sheet_name] = pd.DataFrame(records)
+
+    # ACCOUNT_PERIOD_INSIGHTS was added after the original SHEETS config.
+    # Load it opportunistically so older deployments still boot before the
+    # first v0.9.4 collection creates the worksheet.
+    if ACCOUNT_PERIOD_SHEET not in result:
+        try:
+            worksheet = spreadsheet.worksheet(ACCOUNT_PERIOD_SHEET)
+            records = worksheet.get_all_records()
+            result[ACCOUNT_PERIOD_SHEET] = pd.DataFrame(records)
+        except Exception:
+            result[ACCOUNT_PERIOD_SHEET] = pd.DataFrame()
 
     return result
 
@@ -384,6 +397,7 @@ def prepare_tables(data: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     snapshot = data["MEDIA_SNAPSHOT"].copy()
     ads = data["ADS_DAILY"].copy()
     story = data["STORY_HISTORY"].copy()
+    account_period = data.get(ACCOUNT_PERIOD_SHEET, pd.DataFrame()).copy()
 
     if not account.empty:
         account["snapshot_date"] = pd.to_datetime(account["snapshot_date"], errors="coerce")
@@ -488,6 +502,46 @@ def prepare_tables(data: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
             if "link_clicks" in story.columns:
                 story["link_click_rate"] = (story["link_clicks"] / safe_reach) * 100
 
+    if not account_period.empty:
+        account_period["snapshot_date"] = pd.to_datetime(
+            account_period["snapshot_date"],
+            errors="coerce",
+        )
+        account_period["period_start"] = pd.to_datetime(
+            account_period["period_start"],
+            errors="coerce",
+        ).dt.date
+        account_period["period_end"] = pd.to_datetime(
+            account_period["period_end"],
+            errors="coerce",
+        ).dt.date
+
+        for column in [
+            "views",
+            "reach",
+            "total_interactions",
+            "profile_views",
+            "follows",
+            "unfollows",
+            "net_follows",
+            "ads_inline_link_clicks",
+            "story_link_clicks",
+            "instagram_link_clicks",
+        ]:
+            if column in account_period.columns:
+                account_period[column] = to_numeric_series(
+                    account_period[column]
+                )
+
+        if "story_clicks_included" in account_period.columns:
+            account_period["story_clicks_included_bool"] = bool_series(
+                account_period["story_clicks_included"]
+            )
+
+        account_period = account_period.sort_values(
+            ["snapshot_date", "period_type"]
+        )
+
     return {
         "account": account,
         "audience": audience,
@@ -497,6 +551,7 @@ def prepare_tables(data: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
         "content": content,
         "ads": ads,
         "story": story,
+        "account_period": account_period,
     }
 
 

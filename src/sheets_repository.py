@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from gspread.utils import rowcol_to_a1
+from gspread.exceptions import WorksheetNotFound
 
 from src.sheets_client import (
     get_gspread_client,
@@ -76,6 +77,56 @@ class SheetsRepository:
             )
             for field in key_fields
         )
+
+    def ensure_worksheet(
+        self,
+        sheet_name: str,
+        headers: list[str],
+        *,
+        rows: int = 1000,
+    ):
+        """Create a worksheet with the requested header row if it does not exist."""
+
+        try:
+            worksheet = self.spreadsheet.worksheet(
+                sheet_name
+            )
+        except WorksheetNotFound:
+            worksheet = self.spreadsheet.add_worksheet(
+                title=sheet_name,
+                rows=max(rows, 100),
+                cols=max(len(headers), 1),
+            )
+            worksheet.update(
+                range_name="A1",
+                values=[headers],
+                value_input_option="RAW",
+            )
+            return worksheet
+
+        values = worksheet.row_values(1)
+
+        if not values:
+            worksheet.update(
+                range_name="A1",
+                values=[headers],
+                value_input_option="RAW",
+            )
+            return worksheet
+
+        missing = [
+            header
+            for header in headers
+            if header not in values
+        ]
+
+        if missing:
+            raise RuntimeError(
+                f"{sheet_name}: existing header row is missing columns: {missing}"
+            )
+
+        return worksheet
+
 
     # ========================================
     # Generic upsert

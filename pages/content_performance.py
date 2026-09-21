@@ -143,8 +143,8 @@ def render_content_performance(tables: dict[str, pd.DataFrame]) -> None:
     with filter_cols[0]:
         period_preset = st.selectbox(
             "분석 기간",
-            ["최근 30일", "최근 90일", "올해", "직접 선택"],
-            index=1,
+            ["이번달", "최근 30일", "최근 90일", "올해", "직접 선택"],
+            index=0,
             key="cp_period_preset",
         )
 
@@ -172,7 +172,10 @@ def render_content_performance(tables: dict[str, pd.DataFrame]) -> None:
             help="현재 누적은 CONTENT_LIFETIME, D+7/14/30은 MEDIA_SNAPSHOT을 사용합니다.",
         )
 
-    if period_preset == "최근 30일":
+    if period_preset == "이번달":
+        period_start = current_end.replace(day=1)
+        period_end = current_end
+    elif period_preset == "최근 30일":
         period_start = current_end - timedelta(days=29)
         period_end = current_end
     elif period_preset == "최근 90일":
@@ -293,23 +296,37 @@ def render_content_performance(tables: dict[str, pd.DataFrame]) -> None:
     # --------------------------------------------------------
     # KPI
     # --------------------------------------------------------
-    render_section_title("선택 콘텐츠 성과")
+    render_section_title(
+        "선택 콘텐츠 성과",
+        "상단은 선택 콘텐츠의 합계, 하단은 콘텐츠 1건당 평균입니다.",
+    )
 
-    kpi_cols = st.columns(5)
-    kpi_specs = [
+    views_kpi_col = metric_column("조회수", performance_filter)
+    reach_kpi_col = metric_column("도달수", performance_filter)
+    interactions_kpi_col = metric_column("인터랙션", performance_filter)
+    saved_kpi_col = metric_column("저장", performance_filter)
+
+    st.markdown(
+        '<div class="mini-chart-label">합계</div>',
+        unsafe_allow_html=True,
+    )
+
+    total_cols = st.columns(5)
+    total_specs = [
         ("콘텐츠수", None, COLORS["primary"]),
-        ("평균 조회수", metric_column("조회수", performance_filter), COLORS["cyan"]),
-        ("평균 도달수", metric_column("도달수", performance_filter), COLORS["primary"]),
-        ("평균 인터랙션", metric_column("인터랙션", performance_filter), COLORS["green"]),
-        ("평균 저장", metric_column("저장", performance_filter), COLORS["orange"]),
+        ("총 조회수", views_kpi_col, COLORS["cyan"]),
+        ("총 도달수*" if performance_filter == "전체" else "총 도달수", reach_kpi_col, COLORS["primary"]),
+        ("총 인터랙션", interactions_kpi_col, COLORS["green"]),
+        ("총 저장", saved_kpi_col, COLORS["orange"]),
     ]
 
-    for column, (label, metric_col, accent) in zip(kpi_cols, kpi_specs):
+    for column, (label, metric_col, accent) in zip(total_cols, total_specs):
         with column:
             if metric_col is None:
                 value = f"{len(df):,}개"
             else:
-                value = fmt_int(mean_metric(df, metric_col))
+                value = fmt_int(sum_metric(df, metric_col))
+
             render_kpi_card(
                 label=label,
                 value=value,
@@ -320,8 +337,36 @@ def render_content_performance(tables: dict[str, pd.DataFrame]) -> None:
                 subline=f"{content_type_filter} · {performance_filter}",
             )
 
+    st.write("")
+    st.markdown(
+        '<div class="mini-chart-label">콘텐츠 1건당 평균</div>',
+        unsafe_allow_html=True,
+    )
+
+    avg_cols = st.columns(4)
+    avg_specs = [
+        ("평균 조회수", views_kpi_col, COLORS["cyan"]),
+        ("평균 도달수", reach_kpi_col, COLORS["primary"]),
+        ("평균 인터랙션", interactions_kpi_col, COLORS["green"]),
+        ("평균 저장", saved_kpi_col, COLORS["orange"]),
+    ]
+
+    for column, (label, metric_col, accent) in zip(avg_cols, avg_specs):
+        with column:
+            render_kpi_card(
+                label=label,
+                value=fmt_int(mean_metric(df, metric_col)),
+                accent=accent,
+                direct_delta_text=timing_filter,
+                direct_delta_value=0,
+                direct_delta_label="성과 시점",
+                subline=f"{content_type_filter} · {performance_filter}",
+            )
+
     if performance_filter == "전체":
-        st.caption("* 전체 도달수는 Organic Reach + Paid Reach이며 동일 사용자가 중복 포함될 수 있습니다.")
+        st.caption(
+            "* 총/평균 도달수는 콘텐츠별 Organic Reach + Paid Reach 기준이며 동일 사용자가 여러 콘텐츠에 중복 포함될 수 있습니다."
+        )
 
     # --------------------------------------------------------
     # Analysis controls
