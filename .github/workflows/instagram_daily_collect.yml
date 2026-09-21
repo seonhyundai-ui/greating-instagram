@@ -40,21 +40,15 @@ jobs:
         run: |
           echo "$DOTENV_B64" | base64 --decode > .env
 
-      - name: Restore Google service account
-        shell: bash
-        env:
-          GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
-        run: |
-          mkdir -p credentials
-          echo "$GOOGLE_SERVICE_ACCOUNT_B64" | base64 --decode > credentials/google_service_account.json
-
       - name: Run daily collector
         shell: bash
         env:
           TRIGGER_SOURCE: ${{ github.event.inputs.source || 'manual' }}
+          GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
         run: |
           echo "============================================================"
           echo "GitHub Actions trigger source: ${TRIGGER_SOURCE}"
           echo "Run ID: ${GITHUB_RUN_ID}"
+          echo "Google auth: Service Account"
           echo "============================================================"
           python -u -m scripts.daily_collect

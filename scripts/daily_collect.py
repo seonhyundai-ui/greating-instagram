@@ -64,7 +64,7 @@ from src.sheets_repository import (
 # Version
 # ============================================================
 
-VERSION = "0.9.4"
+VERSION = "1.0.0"
 
 KST = ZoneInfo(
     "Asia/Seoul"

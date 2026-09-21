@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from zoneinfo import ZoneInfo
 
-APP_VERSION = "0.7.0"
+APP_VERSION = "1.0.0"
 KST = ZoneInfo("Asia/Seoul")
 
 SHEETS = [
@@ -13,6 +13,7 @@ SHEETS = [
     "MEDIA_SNAPSHOT",
     "ADS_DAILY",
     "STORY_HISTORY",
+    "ACCOUNT_PERIOD_INSIGHTS",
 ]
 
 PERFORMANCE_LABELS = {
