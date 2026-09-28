@@ -17,9 +17,10 @@ from dashboard.core import *  # shared dashboard metrics/filter/UI helpers
 
 PERFORMANCE_TIMING = {
     "현재 누적": None,
+    "D+1": 1,
+    "D+3": 3,
     "D+7": 7,
     "D+14": 14,
-    "D+30": 30,
 }
 
 ANALYSIS_AXES = {
@@ -169,7 +170,7 @@ def render_content_performance(tables: dict[str, pd.DataFrame]) -> None:
             "성과 시점",
             list(PERFORMANCE_TIMING.keys()),
             key="cp_timing",
-            help="현재 누적은 CONTENT_LIFETIME, D+7/14/30은 MEDIA_SNAPSHOT을 사용합니다.",
+            help="현재 누적은 CONTENT_LIFETIME, D+1/3/7/14는 MEDIA_SNAPSHOT을 사용합니다.",
         )
 
     if period_preset == "이번달":
