@@ -426,11 +426,11 @@ def render_ads(tables: dict[str, pd.DataFrame]) -> None:
     )
 
     kpis = [
-        ("광고비", "spend", COLORS["pink"], "neutral"),
+        ("광고비", "spend", COLORS["pink"], "higher"),
         ("노출수", "impressions", COLORS["purple"], "higher"),
         ("클릭수", "clicks", COLORS["primary"], "higher"),
         ("CTR", "ctr_calc", COLORS["cyan"], "higher"),
-        ("CPC", "cpc_calc", COLORS["orange"], "lower"),
+        ("CPC", "cpc_calc", COLORS["orange"], "higher"),
         ("Paid 인터랙션", "paid_interactions", COLORS["green"], "higher"),
     ]
 
