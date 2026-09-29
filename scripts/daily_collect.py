@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import os
 
 from datetime import (
     date,
@@ -38,6 +39,7 @@ from src.fetch_audience import (
 
 from src.fetch_media import (
     fetch_media,
+    fetch_media_archive,
 )
 
 from src.fetch_media_insights import (
@@ -867,6 +869,192 @@ def collect_new_content(
         f"{len(rows):,}"
         f" | inserted="
         f"{result['inserted']}"
+    )
+
+
+# ============================================================
+# 3A. CONTENT_MASTER media URL refresh
+# ============================================================
+
+def refresh_content_media_urls(
+    media: list[dict],
+) -> None:
+    """
+    Refresh only Meta-managed URL fields in CONTENT_MASTER.
+
+    Policy:
+    - Run only from the 08:00 Apps Script trigger.
+    - Preserve all manual taxonomy / title / campaign fields.
+    - Keep the existing value when Meta returns an empty URL.
+    - Update columns in bulk, not one cell/request per content item.
+    """
+
+    section(
+        "[3A/9] CONTENT_MASTER MEDIA URL REFRESH"
+    )
+
+    worksheet = (
+        sheets.spreadsheet.worksheet(
+            "CONTENT_MASTER"
+        )
+    )
+
+    values = worksheet.get_all_values()
+
+    if not values:
+        print(
+            "[WARN] CONTENT_MASTER is empty. URL refresh skipped."
+        )
+        return
+
+    headers = values[0]
+
+    required_headers = [
+        "media_id",
+        "permalink",
+        "media_url",
+        "thumbnail_url",
+    ]
+
+    missing_headers = [
+        header
+        for header in required_headers
+        if header not in headers
+    ]
+
+    if missing_headers:
+        raise RuntimeError(
+            "CONTENT_MASTER URL refresh missing columns: "
+            + ", ".join(missing_headers)
+        )
+
+    media_by_id = {}
+
+    for item in media:
+        media_id = str(
+            item.get("id")
+            or ""
+        ).strip()
+
+        if media_id:
+            media_by_id[media_id] = item
+
+    media_id_idx = headers.index("media_id")
+    permalink_idx = headers.index("permalink")
+    media_url_idx = headers.index("media_url")
+    thumbnail_url_idx = headers.index("thumbnail_url")
+
+    permalink_values = []
+    media_url_values = []
+    thumbnail_url_values = []
+
+    matched = 0
+    changed = 0
+
+    for raw_row in values[1:]:
+        row = (
+            raw_row
+            + [""] * (
+                len(headers)
+                - len(raw_row)
+            )
+        )
+
+        media_id = str(
+            row[media_id_idx]
+            or ""
+        ).strip()
+
+        current_permalink = str(
+            row[permalink_idx]
+            or ""
+        ).strip()
+
+        current_media_url = str(
+            row[media_url_idx]
+            or ""
+        ).strip()
+
+        current_thumbnail_url = str(
+            row[thumbnail_url_idx]
+            or ""
+        ).strip()
+
+        item = media_by_id.get(media_id)
+
+        new_permalink = current_permalink
+        new_media_url = current_media_url
+        new_thumbnail_url = current_thumbnail_url
+
+        if item:
+            matched += 1
+
+            fetched_permalink = str(
+                item.get("permalink")
+                or ""
+            ).strip()
+
+            fetched_media_url = str(
+                item.get("media_url")
+                or ""
+            ).strip()
+
+            fetched_thumbnail_url = str(
+                item.get("thumbnail_url")
+                or ""
+            ).strip()
+
+            if fetched_permalink:
+                new_permalink = fetched_permalink
+
+            if fetched_media_url:
+                new_media_url = fetched_media_url
+
+            if fetched_thumbnail_url:
+                new_thumbnail_url = fetched_thumbnail_url
+
+            if (
+                new_permalink != current_permalink
+                or new_media_url != current_media_url
+                or new_thumbnail_url != current_thumbnail_url
+            ):
+                changed += 1
+
+        permalink_values.append([new_permalink])
+        media_url_values.append([new_media_url])
+        thumbnail_url_values.append([new_thumbnail_url])
+
+    data_row_count = len(values) - 1
+
+    if data_row_count <= 0:
+        print(
+            "[WARN] CONTENT_MASTER has no data rows. URL refresh skipped."
+        )
+        return
+
+    for column_name, column_values in [
+        ("permalink", permalink_values),
+        ("media_url", media_url_values),
+        ("thumbnail_url", thumbnail_url_values),
+    ]:
+        column_number = headers.index(column_name) + 1
+        start_cell = rowcol_to_a1(2, column_number)
+        end_cell = rowcol_to_a1(
+            data_row_count + 1,
+            column_number,
+        )
+
+        worksheet.update(
+            range_name=f"{start_cell}:{end_cell}",
+            values=column_values,
+            value_input_option="RAW",
+        )
+
+    print(
+        f"[OK] fetched={len(media_by_id):,}"
+        f" | master_rows={data_row_count:,}"
+        f" | matched={matched:,}"
+        f" | changed={changed:,}"
     )
 
 
@@ -3094,14 +3282,72 @@ def main() -> None:
     )
 
     # ========================================================
-    # Recent media
+    # Media
+    # 08:00 Apps Script run: fetch full archive once and refresh
+    # expiring media URLs. Evening/manual runs keep the normal
+    # recent-200 collection path.
     # ========================================================
 
-    media = fetch_media(
-        meta,
-        INSTAGRAM_ACCOUNT_ID,
-        max_items=200,
+    trigger_source = (
+        os.getenv(
+            "TRIGGER_SOURCE",
+            "local_manual",
+        )
+        .strip()
+        .lower()
     )
+
+    morning_url_refresh = (
+        trigger_source
+        == "apps_script_0800"
+    )
+
+    print()
+    print(
+        f"[INFO] Trigger source="
+        f"{trigger_source}"
+        f" | full_url_refresh="
+        f"{'Y' if morning_url_refresh else 'N'}"
+    )
+
+    archive_media = None
+
+    if morning_url_refresh:
+        try:
+            archive_media = fetch_media_archive(
+                meta,
+                INSTAGRAM_ACCOUNT_ID,
+                max_items=5000,
+            )
+
+            media = archive_media[:200]
+
+            print(
+                f"[INFO] Full media archive loaded="
+                f"{len(archive_media):,}"
+            )
+
+        except MetaAPIError as exc:
+            print(
+                "[WARN] Full media archive fetch failed; "
+                "continuing with normal recent-media collection. "
+                f"| {exc}"
+            )
+
+            archive_media = None
+
+            media = fetch_media(
+                meta,
+                INSTAGRAM_ACCOUNT_ID,
+                max_items=200,
+            )
+
+    else:
+        media = fetch_media(
+            meta,
+            INSTAGRAM_ACCOUNT_ID,
+            max_items=200,
+        )
 
     print()
     print(
@@ -3117,6 +3363,15 @@ def main() -> None:
         media,
         collected_at,
     )
+
+    # ========================================================
+    # 3A. Morning-only expiring URL refresh
+    # ========================================================
+
+    if archive_media is not None:
+        refresh_content_media_urls(
+            archive_media,
+        )
 
     # ========================================================
     # 4. Ads mapping
